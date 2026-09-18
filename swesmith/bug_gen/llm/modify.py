@@ -100,11 +100,15 @@ def gen_bug_from_code_lm(
             if "Explanation" in message.content
             else message.content.split("```")[-1].strip()
         )
+        try: # UGLY, do not use for actual costly bug generation
+            cost = completion_cost(completion_response=response) / n_bugs
+        except Exception:
+            cost = 0.0
         bugs.append(
             BugRewrite(
                 rewrite=extract_code_block(message.content),
                 explanation=explanation,
-                cost=completion_cost(completion_response=response) / n_bugs,
+                cost=cost,
                 output=message.content,
                 strategy="llm",
             )
@@ -134,6 +138,15 @@ def main(
     rp.clone()
     print("Extracting candidates...")
     candidates = rp.extract_entities()
+
+    # Universal filter: exclude tests, benchmarks, docs, examples, and setup scripts
+    ignored_patterns = ("test", "tests", "benchmark", "benchmarks", "docs", "example", "examples")
+    candidates = [
+        c for c in candidates
+        if not any(seg.lower() in ignored_patterns for seg in c.file_path.split("/"))
+           and not c.file_path.endswith(("setup.py", "conftest.py"))
+    ]
+
     print(f"{len(candidates)} candidates found in {repo}")
     if not candidates:
         print(f"No candidates found in {repo}.")

@@ -1,0 +1,39 @@
+name: class_basic
+criteria: all
+system: |-
+  You are an expert Python engineer evaluating how static type systems interact with automated software repair.
+  Your job is to rewrite a Python class from a typed functional programming library (`returns`) to introduce logical or typing bugs that will break unit tests.
+
+  When designing bugs, prioritize mutations that interact with static typing and runtime type contracts:
+  - Container/Monad Unwrapping errors: Return the naked wrapped value instead of the monadic container, or wrap an already-wrapped container an extra time (e.g., returning `x` instead of `Success(x)`, or `Success(Success(x))`).
+  - Monadic Rail Switching: Return a `Success` variant where an error path or exception should have returned a `Failure` (or `Nothing` instead of `Some`), or vice versa, causing runtime pipeline diversion.
+  - Generic/TypeVar Substitution mismatch: Swap values of generic type parameters `_ValueType` and `_ErrorType`, or introduce a silent mismatch between declared type annotations and actual instantiated types.
+  - Law and Method Invariants: Alter the implementation of methods like `bind`, `map`, `alt`, or `value_or` so that they fail basic functor/monad composition laws while maintaining syntactic structure.
+  - Misaligned Optional/None handling: Replace containerized `Nothing` with a raw `None`, or fail to unpack a `Maybe` before passing to a downstream function.
+  - Silent Fallback & Type Coercion: Catch an error and coerce it to an incompatible default container type that passes runtime imports but fails assertion checks.
+
+  Your rewritten class...
+  - MUST remain syntactically valid Python 3.12 code.
+  - MUST preserve all existing class names, public method names, and method signatures (including argument names and type annotations).
+  - MUST NOT add inline comments revealing or hinting at the introduced bug.
+  - MUST NOT delete docstrings or type signatures.
+
+  Ensure the bug will reliably fail test assertions while highlighting whether a downstream repair agent reads type annotations or runs `mypy`.
+demonstration: ""
+instance: |-
+  <SOURCE_CODE>
+  {{src_code}}
+  </SOURCE_CODE>
+
+  <TARGET_TEST_SUITE>
+  {{test_code}}
+  </TARGET_TEST_SUITE>
+
+  <INSTRUCTIONS>
+  1. Inspect <TARGET_TEST_SUITE> to identify specific assertions, behaviors, or invariants tested against <SOURCE_CODE>.
+  2. Modify <SOURCE_CODE> so that at least one (preferably 1-3) specific tests in <TARGET_TEST_SUITE> FAIL, while other unrelated tests continue to pass.
+  3. Ensure the code still executes and imports cleanly (do not cause SyntaxError or ModuleNotFoundError).
+  4. DO NOT INCLUDE ANY COMMENTS IN THE CODE OR POINT OUT THE BUG IN ANY WAY.
+  </INSTRUCTIONS>
+
+  OUTPUT:

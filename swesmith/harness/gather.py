@@ -325,13 +325,18 @@ def process_instance(
 
     with open(path_results) as f:
         results = json.load(f)
-    if PASS_TO_FAIL not in results or PASS_TO_PASS not in results:
+
+    f2p_key = FAIL_TO_PASS if FAIL_TO_PASS in results else PASS_TO_FAIL
+    p2p_key = PASS_TO_PASS
+
+    if f2p_key not in results or p2p_key not in results:
         if verbose:
             print(f"[SKIP] {subfolder}: No validatable bugs")
         return [], set(), {"new_tasks": 0, "skipped": 1}
 
-    n_f2p = len(results[PASS_TO_FAIL])
-    n_p2p = len(results[PASS_TO_PASS])
+    n_f2p = len(results[f2p_key])
+    n_p2p = len(results[p2p_key])
+
     pr_exception = ".pr_" in subfolder and n_p2p == 0 and n_f2p > 0
     if not pr_exception and (KEY_TIMED_OUT in results or n_f2p == 0 or n_p2p == 0):
         if verbose:
@@ -343,10 +348,8 @@ def process_instance(
     task_instance = {
         KEY_INSTANCE_ID: subfolder,
         KEY_PATCH: patch_content,
-        FAIL_TO_PASS: results[
-            PASS_TO_FAIL
-        ],  # Flip PASS_TO_FAIL to FAIL_TO_PASS following SWE-bench naming convention
-        PASS_TO_PASS: results[PASS_TO_PASS],
+        FAIL_TO_PASS: results[f2p_key],
+        PASS_TO_PASS: results[p2p_key],
     }
     rp = registry.get_from_inst(task_instance)
     task_instance[KEY_IMAGE_NAME] = rp.image_name
@@ -418,8 +421,19 @@ def process_instance(
                 cloned = True
                 created_repos.add(rp.repo_name)
 
-                # Fix origin remote
-                remote_url = f"https://github.com/{rp.mirror_name}.git"
+                # Read from environment with sensible fallbacks
+                GITHUB_USER = os.environ.get("SWE_GITHUB_USER", "Ceplecha")
+                USE_SSH = os.environ.get("SWE_USE_SSH", "true").lower() in ("1", "true", "yes")
+                REPO_SUFFIX = os.environ.get("SWE_REPO_SUFFIX", "-test")  # set to "" if not using suffix
+
+                # rp.repo_name contains just the project name (e.g., 'returns' or 'requests')
+                custom_repo = f"{GITHUB_USER}/{rp.repo_name}{REPO_SUFFIX}"
+
+                if USE_SSH:
+                    remote_url = f"git@github.com:{custom_repo}.git"
+                else:
+                    remote_url = f"https://github.com/{custom_repo}.git"
+
                 subprocess.run(
                     f"git remote set-url origin {remote_url}",
                     cwd=repo_path,

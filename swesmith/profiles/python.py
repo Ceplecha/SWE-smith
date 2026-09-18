@@ -108,6 +108,49 @@ class PythonProfile(RepoProfile):
 
 ### MARK: Repository Profile Classes ###
 
+@dataclass
+class ReturnsTest9d4641b5(PythonProfile):
+    owner: str = "Ceplecha"
+    repo: str = "returns-test"
+    commit: str = "9d4641b5687984ba5a16cbdf98bc45482e5d78d8"
+    python_version: str = "3.12"
+    install_cmds: list = field(
+        default_factory=lambda: [
+            "pip install -e .",
+            "pip install pytest pytest-cov hypothesis anyio httpx pytest-subtests pytest-benchmark covdefaults pytest-mypy-plugins mypy",
+        ]
+    )
+    test_cmd: str = (
+        "source /opt/miniconda3/bin/activate; "
+        f"conda activate {ENV_NAME}; "
+        "pytest -o addopts='' --no-cov "
+        "-p no:xdist "
+        "--ignore=benchmarks "
+        "--ignore=typesafety "
+        "--ignore=tests/test_laws.py "
+        "--ignore=tests/test_contrib "
+        "--ignore=tests/test_primitives/test_laws "
+        "--ignore=tests/test_examples/test_your_container/test_pair4.py "
+        "--disable-warnings --color=no --tb=short --verbose"
+    )
+
+    @property
+    def mirror_url(self) -> str:
+        return "git@github.com:Ceplecha/returns-test.git"
+
+    def clone(self, dest: str | None = None) -> tuple[Path, bool]:
+        target_dir = Path(dest or self.repo_name)
+        if target_dir.exists():
+            return target_dir, False
+
+        clone_url = f"git@github.com:{self.owner}/{self.repo}.git"
+        subprocess.run(["git", "clone", clone_url, str(target_dir)], check=True)
+        subprocess.run(
+            ["git", "checkout", self.commit],
+            cwd=target_dir,
+            check=True,
+        )
+        return target_dir, True
 
 @dataclass
 class Addict75284f95(PythonProfile):
@@ -1191,16 +1234,17 @@ class MypyE93f06ce(PythonProfile):
         return self.test_cmd, test_keys
 
     def log_parser(self, log: str) -> dict[str, str]:
+        """Parser for test logs generated with PyTest framework"""
+        # Strip ANSI escape codes
+        log = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', log)
+
         test_status_map = {}
         for line in log.split("\n"):
-            for status in [
-                TestStatus.PASSED.value,
-                TestStatus.FAILED.value,
-            ]:
-                if status in line:
-                    test_case = line.split()[-1]
-                    test_status_map[test_case] = status
-                    break
+            for status in TestStatus:
+                is_match = re.match(rf"^(\S+)(\s+){status.value}", line)
+                if is_match:
+                    test_status_map[is_match.group(1)] = status.value
+                    continue
         return test_status_map
 
 

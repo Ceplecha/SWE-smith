@@ -1,0 +1,57 @@
+name: lm_modify
+parameters:
+  bug_examples:
+    - "Container Wrapping Error: Return the unwrapped internal value instead of wrapping it in the expected monadic container (e.g. returning value instead of Success(value)), violating the return type signature."
+    - "Monadic Rail Inversion: In an error-handling path, construct and return a Success/Some instead of Failure/Nothing (or vice versa), breaking railroad-oriented control flow."
+    - "Map vs Bind Confusion: Use map on a function that returns a container (creating a nested container Result[Result[T, E]]) instead of bind/flat_map."
+    - "Type-check Bypassing Sentinel: Return an empty container or None that satisfies an optional type annotation at lint time, but fails runtime test assertions."
+    - "Covariant/Contravariant Value Swap: In dual-container types like Result[Value, Error], swap the positions or assignments of the success and failure values."
+    - "Decorator and HKT Logic Degradation: If modifying a decorator (e.g., @safe, @curry), alter the wrapper to return the uncalled function or fail to catch the declared exception types."
+    - "Edge Case Unpacking: In functions unpacking containers, fail to handle the empty/failure state (e.g., directly calling .unwrap() or accessing internal attributes without type-guarding)."
+  tips:
+    - "The modified code must be valid Python 3.12."
+    - "Do not modify the function or method signature, parameters, or type annotations."
+    - "The bug should evaluate whether code repair models benefit from running a type checker (mypy) to isolate failures."
+    - "Do not include comments indicating the bug or explaining the change in the code."
+    - "Keep all original docstrings intact."
+system: |-
+  You are an automated mutation generator creating benchmark tasks for evaluating LLMs on type-aware program repair.
+  Your task is to modify a function or method from a typed Python codebase to introduce a realistic bug related to typing, monadic composition, or container logic.
+
+  Select one of the following mutation strategies:
+  {% for bug in (bug_examples | shuffle)[:3] %}
+  - {{ bug -}}
+  {% endfor %}
+
+  Guidelines:
+  {% for tip in tips | shuffle %}
+  - {{ tip -}}
+  {% endfor %}
+
+  Your answer MUST be formatted as follows:
+
+  Explanation:
+  <explanation>
+
+  Bugged Code:
+
+  <bugged_code>
+
+demonstration: ""
+instance: |-
+  <SOURCE_CODE>
+  {{src_code}}
+  </SOURCE_CODE>
+
+  <TARGET_TEST_SUITE>
+  {{test_code}}
+  </TARGET_TEST_SUITE>
+
+  <INSTRUCTIONS>
+  1. Inspect <TARGET_TEST_SUITE> to identify specific assertions, behaviors, or invariants tested against <SOURCE_CODE>.
+  2. Modify <SOURCE_CODE> so that at least one (preferably 1-3) specific tests in <TARGET_TEST_SUITE> FAIL, while other unrelated tests continue to pass.
+  3. Ensure the code still executes and imports cleanly (do not cause SyntaxError or ModuleNotFoundError).
+  4. DO NOT INCLUDE ANY COMMENTS IN THE CODE OR POINT OUT THE BUG IN ANY WAY.
+  </INSTRUCTIONS>
+
+  OUTPUT:
