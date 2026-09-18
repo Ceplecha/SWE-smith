@@ -1,6 +1,6 @@
 """
 Purpose: Given the validation logs, create a SWE-bench-style dataset + set of repositories
-that can be run with SWE-agent. Each instances is of the form:
+that can be run with SWE-agent. Each instance is of the form:
 
 {
     "instance_id":
@@ -17,38 +17,32 @@ This script will clone the repository, apply the patches and push them to new br
 
 IMPORTANT: Make sure you run authenticated git, because else you'll get rate limit issues.
 
-Note: It cannot be strictly SWE-bench. Using SWE-bench styles + infra would be difficult because the
-installation specifications are fundamentally different. Therefore, the construction of this
-dataset aims for two goals:
-* To be runnable in SWE-agent
-* To be easy to evaluate with our custom scripts.
-
 Usage: python -m swesmith.harness.gather logs/run_validation/<run_id>
 """
 
 import argparse
-import json
-import os
-import shlex
-import subprocess
 import concurrent.futures
 import functools
-
+import json
+import os
 from pathlib import Path
+import shlex
+import subprocess
+
 from swebench.harness.constants import (
-    PASS_TO_FAIL,
-    PASS_TO_PASS,
     FAIL_TO_PASS,
     KEY_INSTANCE_ID,
     LOG_REPORT,
+    PASS_TO_FAIL,
+    PASS_TO_PASS,
 )
 from swesmith.constants import (
     GIT_APPLY_CMDS,
     KEY_IMAGE_NAME,
     KEY_PATCH,
     KEY_TIMED_OUT,
-    LOG_DIR_TASKS,
     LOG_DIR_RUN_VALIDATION,
+    LOG_DIR_TASKS,
     REF_SUFFIX,
 )
 from swesmith.profiles import registry
@@ -105,8 +99,6 @@ def check_if_branch_exists(
 ):
     branch_exists = False
     try:
-        # Check remote for branch existence directly
-        # This is more robust than checkout/fetch for cached repos
         result = subprocess.run(
             f"git ls-remote --heads origin {subfolder}",
             cwd=repo_name,
@@ -115,11 +107,9 @@ def check_if_branch_exists(
             text=True,
         )
 
-        # If there is output, the branch exists on remote
         if result.returncode == 0 and subfolder in result.stdout:
             branch_exists = True
             if override_branch:
-                # Delete the branch remotely
                 subprocess.run(
                     f"git push --delete origin {subfolder}",
                     cwd=repo_name,
@@ -143,13 +133,10 @@ def _main(
     repush_image: bool = False,
     verbose: bool = False,
 ):
-    """
-    Create a SWE-bench-style dataset from the validation logs.
+    for var in ["SWE_GITHUB_USER", "SWE_USE_SSH", "SWE_REPO_SUFFIX", "MAX_WORKERS"]:
+        if var not in os.environ:
+            raise KeyError(f"Mandatory environment variable '{var}' is not set.")
 
-    Args:
-        validation_logs_path: Path to the validation logs
-        debug_subprocess: Whether to output subprocess output
-    """
     if not debug_subprocess:
         SUBPROCESS_ARGS["stdout"] = subprocess.DEVNULL
         SUBPROCESS_ARGS["stderr"] = subprocess.DEVNULL
@@ -179,32 +166,27 @@ def _main(
             task_instances = [
                 x
                 for x in json.load(f)
-                if x[KEY_INSTANCE_ID] in subfolders  # Omits removed bugs
+                if x[KEY_INSTANCE_ID] in subfolders
             ]
         completed_ids = [x[KEY_INSTANCE_ID] for x in task_instances]
         print(f"Found {len(task_instances)} existing task instances")
         subfolders = [x for x in subfolders if x not in completed_ids]
 
-    completed_ids = set(completed_ids)  # Optimize lookup
+    completed_ids = set(completed_ids)
     subfolders_to_process = [x for x in subfolders if x not in completed_ids]
 
     print(f"Will process {len(subfolders_to_process)} instances")
 
-    # Determine number of workers
-    n_workers = int(os.environ.get("MAX_WORKERS", os.cpu_count() or 1))
+    n_workers = int(os.environ["MAX_WORKERS"].strip("\"'"))
     print(f"Using {n_workers} workers")
 
-    # Optimization: Cache repo locally to avoid rate limits and speed up cloning
     import tempfile
 
     with tempfile.TemporaryDirectory() as cache_root:
-        # cache_root exists, so rp.clone(dest=cache_root) would skip cloning.
-        # We must clone into a subdirectory which doesn't exist yet.
         cache_dir = os.path.join(cache_root, "repo")
         print(f"Pre-cloning repository to cache: {cache_dir}...")
 
         rp_cache = None
-        # Try resolving profile from run_id (directory name) first
         try:
             rp_cache = registry.get(run_id)
         except Exception:
@@ -233,7 +215,6 @@ def _main(
             )
 
         with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
-            # Create a partial function with fixed arguments
             func = functools.partial(
                 process_instance,
                 validation_logs_path=validation_logs_path,
@@ -251,7 +232,6 @@ def _main(
                 )
             )
 
-    # Aggregate results
     stats = {"new_tasks": 0, "skipped": 0}
     for res_tasks, res_repos, res_stats in results:
         task_instances.extend(res_tasks)
@@ -284,24 +264,16 @@ def process_instance(
     verbose: bool,
     cache_dir: str | None = None,
 ) -> tuple[list[dict], set[str], dict]:
-    """
-    Process a single task instance.
-    Returns:
-        task_instances: list of created task instances
-        created_repos: set of repository names that were cloned
-        stats: dictionary of statistics
-    """
     stats = {"new_tasks": 0, "skipped": 0}
     task_instances = []
     created_repos = set()
 
-    # Use a unique temporary directory for this process/task to avoid collision
-    # We append process ID or random string to repo path
     import multiprocessing
 
     pid = multiprocessing.current_process().pid
 
-    # Define subprocess args locally to avoid global state issues with multiprocessing
+    os.environ["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+
     subprocess_args = SUBPROCESS_ARGS.copy()
     if not debug_subprocess:
         subprocess_args["stdout"] = subprocess.DEVNULL
@@ -355,22 +327,16 @@ def process_instance(
     task_instance[KEY_IMAGE_NAME] = rp.image_name
     task_instance["repo"] = rp.mirror_name
 
-    # Persistent worker path - reused across tasks for this process
-    # We place it in the same temporary directory as the cache to ensure automatic cleanup.
     if cache_dir:
-        # cache_dir is .../temp/repo, so dirname is .../temp
         repo_path = os.path.join(
             os.path.dirname(cache_dir), f"{rp.repo_name}_worker_{pid}"
         )
     else:
-        # Fallback if no cache used (e.g. debugging), though likely not cleaned up automatically
         repo_path = os.path.abspath(f"{rp.repo_name}_worker_{pid}")
 
-    # Helper to reset repo state
     def reset_repo(path):
         subprocess.run("git reset --hard", cwd=path, **subprocess_args)
         subprocess.run("git clean -fdx", cwd=path, **subprocess_args)
-        # remove potential lock files if previous run crashed hard
         lock_file = os.path.join(path, ".git", "index.lock")
         if os.path.exists(lock_file):
             try:
@@ -380,15 +346,31 @@ def process_instance(
 
     cloned = False
     try:
+        github_user = os.environ["SWE_GITHUB_USER"].strip("\"'")
+        use_ssh = os.environ["SWE_USE_SSH"].strip("\"'").lower() in ("1", "true", "yes")
+        repo_suffix = os.environ["SWE_REPO_SUFFIX"].strip("\"'")
+
+        # If SWE_REPO_NAME was set explicitly by the caller, use it.
+        # Otherwise, derive the base repository name and strip unwanted hash suffixes.
+        if "SWE_REPO_NAME" in os.environ:
+            base_name = os.environ["SWE_REPO_NAME"].strip("\"'")
+        else:
+            base_name = rp.repo_name.split("__")[-1].split(".")[0]
+            if repo_suffix and not base_name.endswith(repo_suffix):
+                base_name = f"{base_name}{repo_suffix}"
+
+        custom_repo = f"{github_user}/{base_name}"
+
+        if use_ssh:
+            remote_url = f"git@github.com:{custom_repo}.git"
+        else:
+            remote_url = f"https://github.com/{custom_repo}.git"
+
         if os.path.exists(repo_path):
-            # Reuse existing repo for this worker
             if verbose:
                 print(f"[{subfolder}] Reusing worker repo {repo_path}")
             reset_repo(repo_path)
 
-            # We need to know main branch name. We can get it from local repo now.
-            # Assuming main branch hasn't changed name/ref significantly.
-            # We avoid 'git pull' to save rate limits and time.
             main_branch = (
                 subprocess.run(
                     "git rev-parse --abbrev-ref HEAD",
@@ -400,13 +382,10 @@ def process_instance(
                 .stdout.decode()
                 .strip()
             )
-            # Ensure we are on main branch
             subprocess.run(
                 f"git checkout {main_branch}", cwd=repo_path, **subprocess_args
             )
-
         else:
-            # First time setup for this worker
             if cache_dir and os.path.exists(cache_dir):
                 if verbose:
                     print(f"[{subfolder}] First-time clone from cache {cache_dir}...")
@@ -420,28 +399,6 @@ def process_instance(
                 )
                 cloned = True
                 created_repos.add(rp.repo_name)
-
-                # Read from environment with sensible fallbacks
-                GITHUB_USER = os.environ.get("SWE_GITHUB_USER", "Ceplecha")
-                USE_SSH = os.environ.get("SWE_USE_SSH", "true").lower() in ("1", "true", "yes")
-                REPO_SUFFIX = os.environ.get("SWE_REPO_SUFFIX", "-test")  # set to "" if not using suffix
-
-                # rp.repo_name contains just the project name (e.g., 'returns' or 'requests')
-                custom_repo = f"{GITHUB_USER}/{rp.repo_name}{REPO_SUFFIX}"
-
-                if USE_SSH:
-                    remote_url = f"git@github.com:{custom_repo}.git"
-                else:
-                    remote_url = f"https://github.com/{custom_repo}.git"
-
-                subprocess.run(
-                    f"git remote set-url origin {remote_url}",
-                    cwd=repo_path,
-                    check=True,
-                    shell=True,
-                    stdout=subprocess.DEVNULL if not debug_subprocess else None,
-                    stderr=subprocess.DEVNULL if not debug_subprocess else None,
-                )
             else:
                 _, cloned = rp.clone(dest=repo_path)
                 created_repos.add(rp.repo_name)
@@ -458,10 +415,18 @@ def process_instance(
                 .strip()
             )
 
-        # Ensure we are clean on main branch before starting
+        # Force origin to point to the resolved GitHub remote
+        subprocess.run(
+            f"git remote set-url origin {remote_url}",
+            cwd=repo_path,
+            check=True,
+            shell=True,
+            stdout=subprocess.DEVNULL if not debug_subprocess else None,
+            stderr=subprocess.DEVNULL if not debug_subprocess else None,
+        )
+
         subprocess.run(f"git checkout {main_branch}", cwd=repo_path, **subprocess_args)
 
-        # Check if branch already created for this problem
         branch_exists = check_if_branch_exists(
             repo_path, subfolder, main_branch, override_branch, verbose, subprocess_args
         )
@@ -470,14 +435,11 @@ def process_instance(
             if verbose:
                 print(f"[SKIP] {subfolder}: Branch `{subfolder}` exists")
             stats["skipped"] += 1
-            # Do NOT remove repo, just return.
-            # We might want to checkout main to be polite to next run but reset_repo handles it.
             return task_instances, created_repos, stats
 
         elif verbose:
             print(f"[{subfolder}] Does not exist yet")
 
-        # Apply patch
         applied = False
         abs_patch_path = shlex.quote(os.path.abspath(path_patch))
         for git_apply in GIT_APPLY_CMDS:
@@ -495,14 +457,12 @@ def process_instance(
 
         if not applied:
             print(f"[{subfolder}] Failed to apply patch to {rp.repo_name}")
-            # Reset for next usage
             reset_repo(repo_path)
-            return [], set(), stats  # Don't record this one
+            return [], set(), stats
 
         if verbose:
             print(f"[{subfolder}] Bug patch applied successfully")
 
-        # Create branch etc
         cmds = [
             "git config user.email 'swesmith@swesmith.ai'",
             "git config user.name 'swesmith'",
@@ -515,7 +475,6 @@ def process_instance(
                 print(f"[{subfolder}] {cmd}")
             subprocess.run(cmd, cwd=repo_path, **subprocess_args)
 
-        # Check for changes
         status_output = (
             subprocess.run(
                 "git status --porcelain",
@@ -532,8 +491,6 @@ def process_instance(
             if verbose:
                 print(f"[{subfolder}] No changes to commit, skipping")
             stats["skipped"] += 1
-            # Reset logic happens at start of next or via finally...
-            # actually better to cleanup branch now
             subprocess.run(
                 f"git checkout {main_branch}", cwd=repo_path, **subprocess_args
             )
@@ -550,7 +507,6 @@ def process_instance(
                 print(f"[{subfolder}] {cmd}")
             subprocess.run(cmd, cwd=repo_path, **subprocess_args)
 
-        # F2P patch
         f2p_test_files, _ = rp.get_test_files(task_instance)
         if f2p_test_files:
             for test_file in f2p_test_files:
@@ -571,16 +527,41 @@ def process_instance(
             if verbose:
                 print(f"[{subfolder}] Commit F2P test file(s) removal")
 
-        cmds = [
+        push_cmds = [
             f"git push origin {subfolder}",
             f"git checkout {main_branch}",
             "git reset --hard",
             f"git branch -D {subfolder}",
         ]
-        for cmd in cmds:
+        for cmd in push_cmds:
             if debug_subprocess:
                 print(f"[{subfolder}] {cmd}")
-            subprocess.run(cmd, cwd=repo_path, **subprocess_args)
+            proc = subprocess.run(
+                cmd,
+                cwd=repo_path,
+                shell=True,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if proc.returncode != 0:
+                remote_check = subprocess.run(
+                    "git remote get-url origin",
+                    cwd=repo_path,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                print(f"\n[FATAL GIT ERROR in {subfolder}]", flush=True)
+                print(f"  Command:    {cmd}", flush=True)
+                print(f"  Remote URL: {remote_check}", flush=True)
+                print(f"  Exit code:  {proc.returncode}", flush=True)
+                print(f"  Stderr:     \n{proc.stderr.strip()}", flush=True)
+                print(f"  Stdout:     \n{proc.stdout.strip()}\n", flush=True)
+                raise subprocess.CalledProcessError(
+                    proc.returncode, cmd, output=proc.stdout, stderr=proc.stderr
+                )
 
         if verbose:
             print(f"[{subfolder}] Bug @ branch `{subfolder}`")
@@ -591,7 +572,6 @@ def process_instance(
         stats["new_tasks"] += 1
 
     finally:
-        # DO NOT remove repo_path. We persist it for this worker logic.
         pass
 
     return task_instances, created_repos, stats
@@ -610,11 +590,6 @@ if __name__ == "__main__":
         action="store_true",
         help="Verbose mode",
     )
-    # Override branch takes effect when
-    # - A branch for the bug already exists
-    # - But the local version of the bug (in logs/run_validation) has been modified (out of sync with the branch)
-    # In this case, we delete the branch and recreate the bug.
-    # This is useful for if you've regenerated a bug, it's validated, and you'd like to override the existing branch.
     parser.add_argument(
         "-o",
         "--override_branch",
