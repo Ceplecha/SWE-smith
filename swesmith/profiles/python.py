@@ -25,6 +25,11 @@ class PythonProfile(RepoProfile):
     Python installation/test patterns.
     """
 
+    # Core metadata fields (inherited by all repo profiles)
+    owner: str = ""
+    repo: str = ""
+    commit: str = ""
+
     python_version: str = "3.10"
     install_cmds: list[str] = field(
         default_factory=lambda: ["python -m pip install -e ."]
@@ -36,6 +41,27 @@ class PythonProfile(RepoProfile):
     )
     exts: list[str] = field(default_factory=lambda: [".py"])
 
+    @property
+    def mirror_url(self) -> str:
+        """Dynamically build the git SSH mirror URL from owner and repo."""
+        return f"git@github.com:{self.owner}/{self.repo}.git"
+
+    def clone(self, dest: str | Path | None = None) -> tuple[Path, bool]:
+        """Generic cloning and checkout logic shared by all profiles."""
+        target_dir = Path(dest or self.repo_name)
+        if target_dir.exists():
+            return target_dir, False
+
+        clone_url = self.mirror_url
+        subprocess.run(["git", "clone", clone_url, str(target_dir)], check=True)
+        if self.commit:
+            subprocess.run(
+                ["git", "checkout", self.commit],
+                cwd=target_dir,
+                check=True,
+            )
+        return target_dir, True
+
     def get_test_files(self, instance: dict) -> tuple[list[str], list[str]]:
         assert FAIL_TO_PASS in instance and PASS_TO_PASS in instance, (
             f"Instance {instance[KEY_INSTANCE_ID]} missing required keys {FAIL_TO_PASS} or {PASS_TO_PASS}"
@@ -44,9 +70,23 @@ class PythonProfile(RepoProfile):
         return _helper(instance[FAIL_TO_PASS]), _helper(instance[PASS_TO_PASS])
 
     def build_image(self):
-        BASE_IMAGE_KEY = f"{ORG_NAME_DH}/swesmith.x86_64"
         HEREDOC_DELIMITER = "EOF_59812759871"
         PATH_TO_REQS = "swesmith_environment.yml"
+
+        env_dir = LOG_DIR_ENV / self.repo_name
+        env_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create default environment file if missing
+        if not self._env_yml.exists():
+            default_env_content = (
+                f"name: {ENV_NAME}\n"
+                "channels:\n"
+                "  - conda-forge\n"
+                "  - defaults\n"
+                "dependencies:\n"
+                f"  - python={self.python_version}\n"
+            )
+            self._env_yml.write_text(default_env_content)
 
         with open(self._env_yml) as f:
             reqs = f.read()
@@ -65,13 +105,9 @@ class PythonProfile(RepoProfile):
             'echo "Current environment: $CONDA_DEFAULT_ENV"',
         ] + self.install_cmds
 
-        dockerfile = get_dockerfile_env(
-            self.pltf, self.arch, "py", base_image_key=BASE_IMAGE_KEY
-        )
+        dockerfile = get_dockerfile_env(self.pltf, self.arch)
         dockerfile = self._prepare_dockerfile(dockerfile)
 
-        env_dir = LOG_DIR_ENV / self.repo_name
-        env_dir.mkdir(parents=True, exist_ok=True)
         with open(env_dir / "setup_env.sh", "w") as f:
             f.write("\n".join(setup_commands) + "\n")
         with open(env_dir / "Dockerfile", "w") as f:
@@ -134,23 +170,25 @@ class ReturnsTest9d4641b5(PythonProfile):
         "--disable-warnings --color=no --tb=short --verbose"
     )
 
-    @property
-    def mirror_url(self) -> str:
-        return "git@github.com:Ceplecha/returns-test.git"
-
-    def clone(self, dest: str | None = None) -> tuple[Path, bool]:
-        target_dir = Path(dest or self.repo_name)
-        if target_dir.exists():
-            return target_dir, False
-
-        clone_url = f"git@github.com:{self.owner}/{self.repo}.git"
-        subprocess.run(["git", "clone", clone_url, str(target_dir)], check=True)
-        subprocess.run(
-            ["git", "checkout", self.commit],
-            cwd=target_dir,
-            check=True,
-        )
-        return target_dir, True
+@dataclass
+class PymapTest9adeb487(PythonProfile):
+    owner: str = "Ceplecha"
+    repo: str = "pymap-test"
+    commit: str = "9adeb48750b8474124493918435a74f233f7e221"
+    python_version: str = "3.12"
+    install_cmds: list = field(
+        default_factory=lambda: [
+            "pip install -e .[admin,redis,sieve,test]",
+            "pip install pytest pytest-asyncio proxy-protocol grpclib pymacaroons pycryptodome msgpack hypothesis",
+        ]
+    )
+    test_cmd: str = (
+        "source /opt/miniconda3/bin/activate; "
+        f"conda activate {ENV_NAME}; "
+        "pytest -o addopts='' --no-cov "
+        "-p no:xdist "
+        "--disable-warnings --color=no --tb=short -v test/"
+    )
 
 @dataclass
 class Addict75284f95(PythonProfile):

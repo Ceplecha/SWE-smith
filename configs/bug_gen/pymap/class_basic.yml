@@ -1,0 +1,39 @@
+name: class_basic
+criteria: all
+system: |-
+  You are an expert Python engineer evaluating how static type systems interact with automated software repair.
+  Your job is to rewrite a Python class from an asynchronous, typed IMAP server implementation (`pymap`) to introduce logical or typing bugs that will break unit tests.
+
+  When designing bugs, prioritize mutations that interact with protocol logic, static typing, and runtime type contracts:
+  - Sequence Set & UID Indexing: Off-by-one errors in sequence set calculations, reversing 1-based IMAP sequence numbers vs. 0-based internal indexing, or corrupting ranges (e.g., swapping `min` and `max` bounds or `*` resolution).
+  - Byte / String / Encoding Mismatches: Confuse `bytes` and `str`, fail to decode ASCII/UTF-7 mailbox names, or return raw `bytes` where a parsed domain object or token string is expected (causing subtle `TypeError` or assertion failures).
+  - Response Code & Status Diversion: Return an `OK` command response where `NO` or `BAD` is expected by test assertions, or swap internal response codes (e.g., returning `FlagsResponse` instead of `PermanentFlags`, or corrupting `Capability` sets).
+  - Async State Machine & Flag Invariants: Silently drop state mutations (such as `\Seen`, `\Deleted`, or custom message flag operations), mismanage mailbox lock states, or fail to yield the expected message metadata during FETCH/STORE operations.
+  - Optional / None & Frozen Collection Contracts: Return mutable collections where immutable/frozen structures (`frozenlist`, `frozenset`) are expected, or return `None` instead of raising expected protocol exceptions (like `MailboxNotFound` or `InvalidAuth`).
+  - Parsing Token Offsets & Tuples: In parser primitive classes, advance the stream pointer incorrectly, skip delimiter validation (e.g., `Space` vs. `EndLine`), or return malformed parse tuples that pass type checking but fail parser assertions.
+
+  Your rewritten class...
+  - MUST remain syntactically valid Python 3.12 code.
+  - MUST preserve all existing class names, public method names, and method signatures (including argument names, return types, and async/await signatures).
+  - MUST NOT add inline comments revealing or hinting at the introduced bug.
+  - MUST NOT delete docstrings or type signatures.
+
+  Ensure the bug will reliably fail test assertions while highlighting whether a downstream repair agent reads type annotations or runs `mypy`.
+demonstration: ""
+instance: |-
+  <SOURCE_CODE>
+  {{src_code}}
+  </SOURCE_CODE>
+
+  <TARGET_TEST_SUITE>
+  {{test_code}}
+  </TARGET_TEST_SUITE>
+
+  <INSTRUCTIONS>
+  1. Inspect <TARGET_TEST_SUITE> to identify specific assertions, behaviors, or invariants tested against <SOURCE_CODE>.
+  2. Modify <SOURCE_CODE> so that at least one (preferably 1-3) specific tests in <TARGET_TEST_SUITE> FAIL, while other unrelated tests continue to pass.
+  3. Ensure the code still executes and imports cleanly (do not cause SyntaxError or ModuleNotFoundError).
+  4. DO NOT INCLUDE ANY COMMENTS IN THE CODE OR POINT OUT THE BUG IN ANY WAY.
+  </INSTRUCTIONS>
+
+  OUTPUT:

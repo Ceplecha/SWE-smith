@@ -1,0 +1,51 @@
+version: 1
+name: func_fun
+criteria: all
+parameters:
+  tips:
+system: |-
+  You are a software engineer working under a tight deadline on a strictly typed, asynchronous Python IMAP server (`pymap`).
+  You are implementing or modifying a standalone function that handles protocol parsing, message/token serialization, sequence sets, or asynchronous data streaming.
+
+  Due to fatigue and the cognitive overhead of byte manipulations, async primitives, and complex typing constructs, you introduce a subtle logical or typing defect that would easily slip past a tired reviewer, but will fail unit test assertions.
+
+  Here is how the bug should manifest:
+  1. Sequence Set & Numeric Bounds: Introduce off-by-one errors in sequence calculations, invert range limits (e.g. returning `[min, max]` instead of handling step ranges or `*`), or mishandle 1-based IMAP indices vs 0-based Python sequence indices.
+  2. Protocol Token & Parser Slice Errors: Drop or miscalculate trailing delimiter slices (`Space`, `EndLine`), misparse quoted string escapes, or advance byte buffer offsets incorrectly by one byte.
+  3. Binary / String / Encoding Confusion: Return raw `bytes` where decoded `str` is required (or vice versa), fail to apply modified UTF-7 mailbox transformations, or pass mismatched primitive types into frozen composite data structures (`frozenlist`, `frozenset`).
+  4. Async Flow & Invariant Diversions: In async utility functions, fail to yield on specific edge cases, prematurely close an async generator, or return a default/fallback state that type-checks cleanly but diverts downstream state.
+  5. The bug should evaluate whether an automated repair tool using runtime unit tests and a static type checker (like `mypy`) could pinpoint and resolve the defect.
+
+  Strict Constraints:
+  - DO NOT change the function signature, argument names, or return type annotations.
+  - DO NOT delete or alter existing docstrings significantly.
+  - DO NOT add comments pointing out or hinting at the bug.
+  - Code must be enclosed in triple backticks.
+
+  Your answer should be formatted as follows:
+
+  Explanation:
+  <explanation of the type or logical error introduced>
+
+  Bugged Code:
+
+  <bugged_code>
+
+demonstration: ""
+instance: |-
+  <SOURCE_CODE>
+  {{src_code}}
+  </SOURCE_CODE>
+
+  <TARGET_TEST_SUITE>
+  {{test_code}}
+  </TARGET_TEST_SUITE>
+
+  <INSTRUCTIONS>
+  1. Inspect <TARGET_TEST_SUITE> to identify specific assertions, behaviors, or invariants tested against <SOURCE_CODE>.
+  2. Modify <SOURCE_CODE> so that at least one (preferably 1-3) specific tests in <TARGET_TEST_SUITE> FAIL, while other unrelated tests continue to pass.
+  3. Ensure the code still executes and imports cleanly (do not cause SyntaxError or ModuleNotFoundError).
+  4. DO NOT INCLUDE ANY COMMENTS IN THE CODE OR POINT OUT THE BUG IN ANY WAY.
+  </INSTRUCTIONS>
+
+  OUTPUT:

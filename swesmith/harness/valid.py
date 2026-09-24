@@ -34,47 +34,50 @@ from swesmith.profiles import registry
 
 
 def print_report(log_dir: Path) -> None:
+    if not log_dir.exists():
+        print(f"Log directory does not exist: {log_dir}")
+        return
+
     time_outs, f2p_none, f2p_some, other = 0, 0, 0, 0
-    for folder in os.listdir(log_dir):
-        if LOG_REPORT in os.listdir(log_dir / folder):
-            with open(log_dir / folder / LOG_REPORT, "r") as f:
-                report = json.load(f)
-            if KEY_TIMED_OUT in report:
-                time_outs += 1
-            elif len(report[FAIL_TO_PASS]) > 0:
-                f2p_some += 1
-            elif len(report[FAIL_TO_PASS]) == 0:
-                f2p_none += 1
-            else:
+    folders = [f for f in os.listdir(log_dir) if (log_dir / f).is_dir()]
+
+    for folder in folders:
+        report_file = log_dir / folder / LOG_REPORT
+        if report_file.is_file():
+            try:
+                with open(report_file, "r") as f:
+                    report = json.load(f)
+                if report.get(KEY_TIMED_OUT):
+                    time_outs += 1
+                elif len(report.get(FAIL_TO_PASS, [])) > 0:
+                    f2p_some += 1
+                elif len(report.get(FAIL_TO_PASS, [])) == 0:
+                    f2p_none += 1
+                else:
+                    other += 1
+            except Exception:
                 other += 1
-    print(f"Total instances: {len(os.listdir(log_dir))}")
+
+    print(f"Total instances in {log_dir.name}: {len(folders)}")
     print(f"- Timed out: {time_outs}")
     print(f"- Fail to pass: 0 ({f2p_none}); 1+ ({f2p_some})")
     print(f"- Other: {other}")
 
 
 def run_validation(instance: dict) -> dict:
-    """
-    Run per-instance validation. Steps are generally:
-    1. Run the patch on the instance.
-    2. Get the report from the test output.
-
-    Returns:
-        dict: Result with keys 'status'
-        status can be: 'timeout', 'fail', '0_f2p', '1+_f2p'
-    """
     instance_id = instance[KEY_INSTANCE_ID]
     rp = registry.get_from_inst(instance)
     valid_folder = LOG_DIR_RUN_VALIDATION / instance["repo"]
-    val_postgold_path = (
-        valid_folder / f"{instance['repo']}{REF_SUFFIX}" / LOG_TEST_OUTPUT
-    )
+
+    # Use rp.repo_name for consistent naming between main() and run_validation()
+    ref_inst_id = f"{rp.repo_name}{REF_SUFFIX}"
+    val_postgold_path = valid_folder / ref_inst_id / LOG_TEST_OUTPUT
     report_path = valid_folder / instance_id / LOG_REPORT
 
     if rp.min_pregold:
-        ref_inst_id = f"{instance[KEY_INSTANCE_ID]}{REF_SUFFIX}"
+        custom_ref_id = f"{instance[KEY_INSTANCE_ID]}{REF_SUFFIX}"
         logger, timed_out = run_patch_in_container(
-            {**instance, KEY_INSTANCE_ID: ref_inst_id},
+            {**instance, KEY_INSTANCE_ID: custom_ref_id},
             instance["repo"],
             LOG_DIR_RUN_VALIDATION,
             rp.timeout,
@@ -84,20 +87,17 @@ def run_validation(instance: dict) -> dict:
             logger.info(f"Timed out (pre-gold) for {instance_id}.")
             report_path.parent.mkdir(parents=True, exist_ok=True)
             with open(report_path, "w") as f:
-                f.write(
-                    json.dumps({KEY_TIMED_OUT: True, "timeout": rp.timeout}, indent=4)
-                )
-            shutil.rmtree(valid_folder / ref_inst_id)
+                json.dump({KEY_TIMED_OUT: True, "timeout": rp.timeout}, f, indent=4)
+            shutil.rmtree(valid_folder / custom_ref_id, ignore_errors=True)
             return {"status": "timeout"}
 
-        # Copy pre-gold test output to the post-gold folder and remove the pre-gold folder
         val_postgold_path = valid_folder / instance_id / LOG_TEST_OUTPUT_PRE_GOLD
         val_postgold_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(
-            valid_folder / ref_inst_id / LOG_TEST_OUTPUT,
+            valid_folder / custom_ref_id / LOG_TEST_OUTPUT,
             val_postgold_path,
         )
-        shutil.rmtree(valid_folder / ref_inst_id)
+        shutil.rmtree(valid_folder / custom_ref_id, ignore_errors=True)
 
     logger, timed_out = run_patch_in_container(
         instance,
@@ -109,24 +109,21 @@ def run_validation(instance: dict) -> dict:
 
     if timed_out:
         logger.info(f"Timed out for {instance_id}.")
+        report_path.parent.mkdir(parents=True, exist_ok=True)
         with open(report_path, "w") as f:
-            f.write(json.dumps({KEY_TIMED_OUT: True, "timeout": rp.timeout}, indent=4))
+            json.dump({KEY_TIMED_OUT: True, "timeout": rp.timeout}, f, indent=4)
         close_logger(logger)
         return {"status": "timeout"}
 
     val_pregold_path = valid_folder / instance_id / LOG_TEST_OUTPUT
     if not val_pregold_path.exists():
         logger.info(f"Pre-gold for {instance_id} failed to run. Exiting early.")
+        report_path.parent.mkdir(parents=True, exist_ok=True)
         with open(report_path, "w") as f:
-            f.write(
-                json.dumps(
-                    {KEY_TIMED_OUT: True, "missing_pregold_output": True}, indent=4
-                )
-            )
+            json.dump({KEY_TIMED_OUT: True, "missing_pregold_output": True}, f, indent=4)
         close_logger(logger)
         return {"status": "fail"}
 
-    # Get report from test output
     logger.info(f"Grading answer for {instance_id}...")
     report = get_valid_report(
         val_pregold_path=val_pregold_path,
@@ -135,11 +132,10 @@ def run_validation(instance: dict) -> dict:
     )
     logger.info(f"Report: {json.dumps(report)}")
 
-    # Write report to report.json
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     with open(report_path, "w") as f:
-        f.write(json.dumps(report, indent=4))
+        json.dump(report, f, indent=4)
 
-    # Return result based on the report
     close_logger(logger)
     if len(report.get(FAIL_TO_PASS, [])) == 0:
         return {"status": "0_f2p"}
@@ -152,56 +148,54 @@ def main(
     workers: int,
     redo_existing: bool = False,
 ) -> None:
-    # Bug patch should be a dict that looks like this:
-    # {
-    #     "instance_id": <instance_id>,
-    #     "patch" / "model_patch": <bug inducing patch>,
-    #     "repo": <mirror repo name>,
-    # }
     print(f"Running validation for {bug_patches}...")
     with open(bug_patches, "r") as f:
-        bug_patches = json.load(f)
-    bug_patches = [
+        raw_patches = json.load(f)
+
+    if not raw_patches:
+        print("No patches found in file.")
+        return
+
+    bug_patches_list = [
         {
             **x,
             KEY_PATCH: x.get(KEY_PATCH, x.get(KEY_PREDICTION)),
         }
-        for x in bug_patches
+        for x in raw_patches
     ]
-    print(f"Found {len(bug_patches)} candidate patches.")
+    print(f"Found {len(bug_patches_list)} candidate patches.")
 
+    all_repos = set(bp["repo"] for bp in bug_patches_list)
     completed = []
-    for repo in set([bp["repo"] for bp in bug_patches]):
+
+    for repo in all_repos:
         log_dir_parent = LOG_DIR_RUN_VALIDATION / repo
         log_dir_parent.mkdir(parents=True, exist_ok=True)
-        if not redo_existing and log_dir_parent.exists():
+        if not redo_existing:
             for folder in os.listdir(log_dir_parent):
-                # Identify completed instances (does report.json exist)
                 log_report_path = log_dir_parent / folder / LOG_REPORT
                 if log_report_path.exists():
                     completed.append(folder)
+
     if len(completed) > 0:
         print(f"Skipping {len(completed)} instances... (--redo_existing to not skip)")
-        bug_patches = [x for x in bug_patches if x[KEY_INSTANCE_ID] not in completed]
+        bug_patches_list = [x for x in bug_patches_list if x[KEY_INSTANCE_ID] not in completed]
 
-    # Group patches by image_name:
     repo_to_bug_patches = defaultdict(list)
-    for bp in bug_patches:
+    for bp in bug_patches_list:
         repo_to_bug_patches[bp["repo"]].append(bp)
 
-    # Log
     print("Will run validation for these images:")
     for repo, patches in repo_to_bug_patches.items():
         print(f"- {repo}: {len(patches)} patches")
 
-    # Run validation
-    payloads = list()
+    payloads = []
     for repo, repo_bug_patches in repo_to_bug_patches.items():
         rp = registry.get(repo)
         ref_inst = f"{rp.repo_name}{REF_SUFFIX}"
         ref_dir = LOG_DIR_RUN_VALIDATION / repo / ref_inst
+
         if not rp.min_pregold and not os.path.exists(ref_dir):
-            # Run pytest for each repo/commit to get pre-gold behavior.
             print(f"Running pre-gold for {repo}...")
             logger, timed_out = run_patch_in_container(
                 {KEY_INSTANCE_ID: ref_inst},
@@ -211,29 +205,23 @@ def main(
             )
             close_logger(logger)
             if timed_out:
-                # If timed out, skip this repo/commit (remove log directory)
-                print(
-                    f"Timed out for {repo}, not running validation. (Increase --timeout?)"
-                )
-                shutil.rmtree(ref_dir)
+                print(f"Timed out for {repo}, skipping this repo. (Increase timeout_ref?)")
+                shutil.rmtree(ref_dir, ignore_errors=True)
                 continue
 
-        # Add payloads
         for bug_patch in repo_bug_patches:
             payloads.append((bug_patch,))
 
-    # Check if we have any payloads to process
     if len(payloads) == 0:
-        print("No patches to run.")
-        print_report(log_dir_parent)
+        print("No patches left to run.")
+        for repo in all_repos:
+            print_report(LOG_DIR_RUN_VALIDATION / repo)
         return
 
-    # Initialize progress bar and stats
     stats = {"fail": 0, "timeout": 0, "0_f2p": 0, "1+_f2p": 0}
     pbar = tqdm(total=len(payloads), desc="Validation", postfix=stats)
     lock = threading.Lock()
 
-    # Create a wrapper function for threadpool that updates progress bar
     def run_validation_with_progress(*args):
         instance = args[0] if args else {}
         result = run_validation(instance)
@@ -244,12 +232,11 @@ def main(
         return result
 
     run_threadpool(run_validation_with_progress, payloads, workers)
-
-    # Close progress bar
     pbar.close()
 
     print("All instances run.")
-    print_report(log_dir_parent)
+    for repo in all_repos:
+        print_report(LOG_DIR_RUN_VALIDATION / repo)
 
 
 if __name__ == "__main__":
