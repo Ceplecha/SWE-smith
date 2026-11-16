@@ -11,7 +11,13 @@ from swebench.harness.constants import (
 )
 from swebench.harness.dockerfiles import get_dockerfile_env
 from swesmith.constants import LOG_DIR_ENV, ENV_NAME, INSTANCE_REF, ORG_NAME_DH
-from swesmith.profiles.base import RepoProfile, registry
+from swesmith.profiles.base import (
+    LOCAL_REPO_BUILD_CONTEXT,
+    LOCAL_REPO_MOUNT,
+    RepoProfile,
+    get_local_repo,
+    registry,
+)
 from swesmith.profiles.utils import INSTALL_BAZEL, INSTALL_CMAKE
 
 
@@ -43,7 +49,10 @@ class PythonProfile(RepoProfile):
 
     @property
     def mirror_url(self) -> str:
-        """Dynamically build the git SSH mirror URL from owner and repo."""
+        """Git URL of the repository: $SWE_LOCAL_REPO if set, else the GitHub SSH URL."""
+        local_repo = get_local_repo()
+        if local_repo is not None:
+            return str(local_repo)
         return f"git@github.com:{self.owner}/{self.repo}.git"
 
     def clone(self, dest: str | Path | None = None) -> tuple[Path, bool]:
@@ -91,10 +100,20 @@ class PythonProfile(RepoProfile):
         with open(self._env_yml) as f:
             reqs = f.read()
 
+        local_repo = get_local_repo()
+        if local_repo is not None:
+            # The local repo is bind-mounted into the build (see below). It is owned by
+            # another uid, so git needs safe.directory to read it.
+            clone_cmd = (
+                f"git -c safe.directory='*' clone -o origin {LOCAL_REPO_MOUNT} /{ENV_NAME}"
+            )
+        else:
+            clone_cmd = f"git clone -o origin {self.mirror_url} /{ENV_NAME}"
+
         setup_commands = [
             "#!/bin/bash",
             "set -euxo pipefail",
-            f"git clone -o origin {self.mirror_url} /{ENV_NAME}",
+            clone_cmd,
             f"cd /{ENV_NAME}",
             "source /opt/miniconda3/bin/activate",
             f"cat <<'{HEREDOC_DELIMITER}' > {PATH_TO_REQS}\n{reqs}\n{HEREDOC_DELIMITER}",
@@ -107,6 +126,17 @@ class PythonProfile(RepoProfile):
 
         dockerfile = get_dockerfile_env(self.pltf, self.arch)
         dockerfile = self._prepare_dockerfile(dockerfile)
+        if local_repo is not None:
+            dockerfile = re.sub(
+                r"^RUN\s+",
+                f"RUN --mount=type=bind,from={LOCAL_REPO_BUILD_CONTEXT},target={LOCAL_REPO_MOUNT} ",
+                dockerfile,
+                flags=re.MULTILINE,
+            )
+            # No GitHub access needed (and no API call to check repo visibility).
+            source_arg = f"--build-context {LOCAL_REPO_BUILD_CONTEXT}={local_repo}"
+        else:
+            source_arg = self._docker_ssh_arg
 
         with open(env_dir / "setup_env.sh", "w") as f:
             f.write("\n".join(setup_commands) + "\n")
@@ -115,7 +145,7 @@ class PythonProfile(RepoProfile):
 
         build_cmd = (
             f"docker build --platform {self.pltf} --no-cache"
-            f" {self._docker_ssh_arg} -t {self.image_name} {env_dir}"
+            f" {source_arg} -t {self.image_name} {env_dir}"
         )
         with open(env_dir / "build_image.log", "w") as log_file:
             subprocess.run(

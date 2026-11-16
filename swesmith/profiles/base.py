@@ -52,6 +52,28 @@ logger = logging.getLogger(__name__)
 _DEFAULT_SSH_KEYS = ["id_rsa", "id_ecdsa", "id_ecdsa_sk", "id_ed25519", "id_ed25519_sk"]
 
 
+LOCAL_REPO_ENV = "SWE_LOCAL_REPO"
+LOCAL_REPO_BUILD_CONTEXT = "swesmith_local_repo"
+LOCAL_REPO_MOUNT = "/swesmith_local_repo"
+
+
+def get_local_repo() -> Path | None:
+    """Local git repository to use instead of GitHub, from $SWE_LOCAL_REPO.
+
+    When set (e.g. to a bare clone made with `git clone --mirror`), repositories are
+    cloned from it, Docker images are built from it via a BuildKit build context, and
+    `gather` pushes task instance branches to it. Supported for Python profiles; it
+    applies to every profile used in the run, so process one repository at a time.
+    """
+    value = os.getenv(LOCAL_REPO_ENV, "").strip().strip("\"'")
+    if not value:
+        return None
+    path = Path(value).expanduser().resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"{LOCAL_REPO_ENV}={value} does not exist")
+    return path
+
+
 def _find_ssh_key() -> Path | None:
     """Find an SSH private key: explicit env var first, then default paths."""
     key_path = os.getenv("GITHUB_USER_SSH_KEY")

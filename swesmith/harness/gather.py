@@ -46,6 +46,7 @@ from swesmith.constants import (
     REF_SUFFIX,
 )
 from swesmith.profiles import registry
+from swesmith.profiles.base import get_local_repo
 from tqdm.auto import tqdm
 
 FAILURE_TIPS = """
@@ -133,7 +134,10 @@ def _main(
     repush_image: bool = False,
     verbose: bool = False,
 ):
-    for var in ["SWE_GITHUB_USER", "SWE_USE_SSH", "SWE_REPO_SUFFIX", "MAX_WORKERS"]:
+    required_vars = ["MAX_WORKERS"]
+    if get_local_repo() is None:
+        required_vars += ["SWE_GITHUB_USER", "SWE_USE_SSH", "SWE_REPO_SUFFIX"]
+    for var in required_vars:
         if var not in os.environ:
             raise KeyError(f"Mandatory environment variable '{var}' is not set.")
 
@@ -346,25 +350,30 @@ def process_instance(
 
     cloned = False
     try:
-        github_user = os.environ["SWE_GITHUB_USER"].strip("\"'")
-        use_ssh = os.environ["SWE_USE_SSH"].strip("\"'").lower() in ("1", "true", "yes")
-        repo_suffix = os.environ["SWE_REPO_SUFFIX"].strip("\"'")
-
-        # If SWE_REPO_NAME was set explicitly by the caller, use it.
-        # Otherwise, derive the base repository name and strip unwanted hash suffixes.
-        if "SWE_REPO_NAME" in os.environ:
-            base_name = os.environ["SWE_REPO_NAME"].strip("\"'")
+        local_repo = get_local_repo()
+        if local_repo is not None:
+            # Push task instance branches to the local repository instead of GitHub.
+            remote_url = str(local_repo)
         else:
-            base_name = rp.repo_name.split("__")[-1].split(".")[0]
-            if repo_suffix and not base_name.endswith(repo_suffix):
-                base_name = f"{base_name}{repo_suffix}"
+            github_user = os.environ["SWE_GITHUB_USER"].strip("\"'")
+            use_ssh = os.environ["SWE_USE_SSH"].strip("\"'").lower() in ("1", "true", "yes")
+            repo_suffix = os.environ["SWE_REPO_SUFFIX"].strip("\"'")
 
-        custom_repo = f"{github_user}/{base_name}"
+            # If SWE_REPO_NAME was set explicitly by the caller, use it.
+            # Otherwise, derive the base repository name and strip unwanted hash suffixes.
+            if "SWE_REPO_NAME" in os.environ:
+                base_name = os.environ["SWE_REPO_NAME"].strip("\"'")
+            else:
+                base_name = rp.repo_name.split("__")[-1].split(".")[0]
+                if repo_suffix and not base_name.endswith(repo_suffix):
+                    base_name = f"{base_name}{repo_suffix}"
 
-        if use_ssh:
-            remote_url = f"git@github.com:{custom_repo}.git"
-        else:
-            remote_url = f"https://github.com/{custom_repo}.git"
+            custom_repo = f"{github_user}/{base_name}"
+
+            if use_ssh:
+                remote_url = f"git@github.com:{custom_repo}.git"
+            else:
+                remote_url = f"https://github.com/{custom_repo}.git"
 
         if os.path.exists(repo_path):
             if verbose:
